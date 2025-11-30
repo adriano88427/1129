@@ -557,10 +557,10 @@ def _fa_format_overall_reference(self, factor_name):
 def _fa_format_rolling_section(rolling_data):
     lines = []
     if not rolling_data:
-        lines.append("  • 滚动IC表现：暂无数据")
+        lines.append("  -  滚动IC表现：暂无数据")
         return lines
 
-    lines.append("  • 滚动IC表现：")
+    lines.append("  -  滚动IC表现：")
     for window in _fa_sort_keys(rolling_data.keys()):
         payload = rolling_data.get(window) or {}
         stats = payload.get('stats') or {}
@@ -582,7 +582,7 @@ def _fa_format_rolling_section(rolling_data):
 def _fa_format_temporal_section(temporal_data):
     lines = []
     if not temporal_data:
-        lines.append("  • 时序一致性：暂无数据")
+        lines.append("  -  时序一致性：暂无数据")
         return lines
 
     ic_stability = temporal_data.get('ic_stability') or {}
@@ -598,7 +598,7 @@ def _fa_format_temporal_section(temporal_data):
     rank_vol = _fa_format_number(rank_stats.get('ranking_volatility'), digits=2)
     rank_change = _fa_format_number(rank_stats.get('mean_ranking_change'), digits=2)
     lines.append(
-        "  • 时序一致性："
+        "  -  时序一致性："
         f"Lag1自相关 {lag1}，趋势相关 {trend_corr}，换向次数 {sign_changes}，"
         f"均值回归度 {mean_reversion}，排名波动 {rank_vol}，平均名次变动 {rank_change}"
     )
@@ -610,9 +610,9 @@ def _fa_format_sample_section(sample_data):
     effects = (sample_data or {}).get('sample_size_effects') or {}
 
     if not effects:
-        lines.append("  • 样本敏感性：暂无数据")
+        lines.append("  -  样本敏感性：暂无数据")
     else:
-        lines.append("  • 样本敏感性：")
+        lines.append("  -  样本敏感性：")
         for size in _fa_sort_keys(effects.keys()):
             stats = effects.get(size) or {}
             mean_ic = _fa_format_number(stats.get('ic_mean'))

@@ -110,6 +110,7 @@ def _fa_score_parameterized_factors(factor_results):
             all_scores.append({
                 '因子名称': factor,
                 '参数区间': param_range,
+                '区间序号': group.get('分组'),
                 '胜率': win_rate,
                 '最大回撤': max_drawdown,
                 '年化收益率': ann_return,
@@ -128,25 +129,32 @@ def _fa_score_parameterized_factors(factor_results):
     if df.empty:
         return df
 
-    df['最终得分'] = df['综合得分']
+    df['相邻平滑后得分'] = df['综合得分']
 
     for factor, group in df.groupby('因子名称', sort=False):
-        indices = list(group.index)
-        n = len(indices)
-        for pos, idx in enumerate(indices):
+        sort_column = '区间序号' if '区间序号' in group.columns else None
+        if sort_column and group[sort_column].notna().any():
+            ordered = group.sort_values(sort_column, kind='mergesort')
+        else:
+            ordered = group
+
+        ordered_indices = ordered.index.to_list()
+        for pos, idx in enumerate(ordered_indices):
             current = float(df.at[idx, '综合得分'])
-            prev_score = float(df.at[indices[pos - 1], '综合得分']) if pos > 0 else None
-            next_score = float(df.at[indices[pos + 1], '综合得分']) if pos < n - 1 else None
+            prev_score = float(df.at[ordered_indices[pos - 1], '综合得分']) if pos > 0 else None
+            next_score = float(df.at[ordered_indices[pos + 1], '综合得分']) if pos < len(ordered_indices) - 1 else None
 
-            if prev_score is not None and next_score is not None:
-                final_score = current * 2.0 + prev_score * 0.5 + next_score * 0.5
-            elif prev_score is None and next_score is not None:
-                final_score = current * 2.2 + next_score
-            elif next_score is None and prev_score is not None:
-                final_score = current * 2.2 + prev_score
-            else:
-                final_score = current * 2.2
+            prev_weight = 0.25 if prev_score is not None else 0.0
+            curr_weight = 0.5
+            next_weight = 0.25 if next_score is not None else 0.0
+            weight_sum = prev_weight + curr_weight + next_weight
 
-            df.at[idx, '最终得分'] = final_score
+            smoothed = (
+                (prev_score if prev_score is not None else 0.0) * prev_weight +
+                current * curr_weight +
+                (next_score if next_score is not None else 0.0) * next_weight
+            ) / weight_sum if weight_sum > 0 else current
+
+            df.at[idx, '相邻平滑后得分'] = smoothed
 
     return df

@@ -153,6 +153,19 @@ body {
 .table tbody tr:hover {
     background: rgba(41,92,219,0.08);
 }
+.highlight-alert {
+    background: #ffd6d6 !important;
+}
+.highlight-blue {
+    background: #d7efff !important;
+}
+.score-emphasis {
+    color: #0b5ed7;
+    font-weight: 600;
+}
+.factor-emphasis {
+    color: #0b5ed7;
+}
 .top-list {
     list-style: none;
     padding-left: 0;
@@ -357,11 +370,16 @@ def render_table(
     headers: Optional[Sequence[str]] = None,
     formatters: Optional[dict] = None,
     empty_text: str = "暂无可展示的数据",
+    cell_classes: Optional[dict] = None,
+    table_class: Optional[str] = None,
 ) -> str:
     if df is None or df.empty:
         return render_alert(empty_text, level="warn")
     headers = headers or columns
     formatters = formatters or {}
+    table_cls = "table"
+    if table_class:
+        table_cls = f"{table_cls} {table_class}"
     thead = "".join(f"<th>{escape(str(h))}</th>" for h in headers)
     rows_html: List[str] = []
     for _, row in df.iterrows():
@@ -376,10 +394,15 @@ def render_table(
                     cell_value = _format_cell(value)
             else:
                 cell_value = _format_cell(value)
-            cells.append(f"<td>{escape(str(cell_value))}</td>")
+            cell_class = ""
+            if cell_classes:
+                row_idx = row.name
+                if row_idx in cell_classes and col in cell_classes[row_idx]:
+                    cell_class = f" class='{cell_classes[row_idx][col]}'"
+            cells.append(f"<td{cell_class}>{escape(str(cell_value))}</td>")
         rows_html.append("<tr>" + "".join(cells) + "</tr>")
     tbody = "".join(rows_html)
-    return f"<div class='table-wrapper'><table class='table'><thead><tr>{thead}</tr></thead><tbody>{tbody}</tbody></table></div>"
+    return f"<div class='table-wrapper'><table class='{table_cls}'><thead><tr>{thead}</tr></thead><tbody>{tbody}</tbody></table></div>"
 
 
 def render_list(items: Iterable[str]) -> str:

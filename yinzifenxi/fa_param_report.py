@@ -78,25 +78,26 @@ def _fa_generate_parameterized_report(self):
         ]
     )
 
-    positive_factors = scores_df[scores_df['因子方向'] == '正向'].sort_values('最终得分', ascending=False)
-    negative_factors = scores_df[scores_df['因子方向'] == '负向'].sort_values('最终得分', ascending=False)
+    positive_factors = scores_df[scores_df['因子方向'] == '正向']
+    negative_factors = scores_df[scores_df['因子方向'] == '负向']
 
     overview_cards = render_metric_cards(
         [
             ("总因子数量", str(len(self.factor_list))),
             ("有效分析因子", str(len(factor_results))),
-            ("最高最终得分", _fmt_score(scores_df['最终得分'].max())),
-            ("最小最大回撤", _fmt_percent(scores_df['最大回撤'].min(), 1)),
+            ("平均年化收益率", _fmt_float(scores_df['年化收益率'].mean(), 3)),
+            ("平均年化夏普比率", _fmt_float(scores_df['年化夏普比率'].mean(), 3)),
+            ("平均最大回撤", _fmt_percent(scores_df['最大回撤'].mean(), 1)),
         ]
     )
     builder.add_section("整体概览", overview_cards)
 
-    ranking_columns = ['排名', '因子名称', '参数区间', '最终得分', '综合得分', '年化收益率', '年化夏普比率', '最大回撤']
-    ranking_headers = ['排名', '因子', '参数区间', '最终得分', '综合得分', '年化收益率', '年化夏普', '最大回撤']
+    ranking_columns = ['排名', '因子名称', '参数区间', '综合得分', '相邻平滑后得分', '年化收益率', '年化夏普比率', '最大回撤']
+    ranking_headers = ['排名', '因子', '参数区间', '综合得分', '相邻平滑后得分', '年化收益率', '年化夏普', '最大回撤']
     ranking_formatters = {
         '排名': lambda x: str(int(x)),
-        '最终得分': _fmt_score,
         '综合得分': _fmt_score,
+        '相邻平滑后得分': _fmt_score,
         '年化收益率': lambda x: _fmt_float(x, 3),
         '年化夏普比率': _fmt_float,
         '最大回撤': lambda x: _fmt_percent(x, 1),
@@ -106,27 +107,47 @@ def _fa_generate_parameterized_report(self):
         desc_html = f"<p class='muted'>{escape(description)}</p>" if description else ""
         return f"<div class='sub-card'><h3>{escape(title)}</h3>{desc_html}{inner_html}</div>"
 
-    def _build_ranking_block(df, empty_text, description):
+    def _build_ranking_block(df, empty_text, description, apply_positive_highlight=False):
         if df.empty:
             return render_alert(empty_text, level="warn")
-        ranking_df = df[['因子名称', '参数区间', '最终得分', '综合得分', '年化收益率', '年化夏普比率', '最大回撤']].copy()
+        ordered_df = df.sort_values('综合得分', ascending=False).reset_index().rename(columns={'index': '__orig_index'})
+        ranking_df = ordered_df[['因子名称', '参数区间', '综合得分', '相邻平滑后得分', '年化收益率', '年化夏普比率', '最大回撤']].copy()
         ranking_df.insert(0, '排名', range(1, len(ranking_df) + 1))
+        cell_classes = {}
+        if apply_positive_highlight:
+            smoothed_rank = df['相邻平滑后得分'].rank(method='min', ascending=False)
+            for pos, row in ordered_df.iterrows():
+                if pos >= 10:
+                    continue
+                orig_idx = row['__orig_index']
+                if smoothed_rank.loc[orig_idx] > 10:
+                    cell_classes.setdefault(pos, {})['相邻平滑后得分'] = 'highlight-alert'
+            metric_cols = ['年化收益率', '年化夏普比率', '最大回撤']
+            for col in metric_cols:
+                values = pd.to_numeric(ordered_df[col], errors='coerce')
+                top_positions = values.nlargest(3).index
+                for pos_idx in top_positions:
+                    cell_classes.setdefault(pos_idx, {})[col] = 'highlight-blue'
+        for pos in range(min(10, len(ordered_df))):
+            cell_classes.setdefault(pos, {})['综合得分'] = 'score-emphasis'
+            cell_classes.setdefault(pos, {})['因子名称'] = 'factor-emphasis'
         table_html = render_table(
             ranking_df,
             ranking_columns,
             headers=ranking_headers,
             formatters=ranking_formatters,
+            cell_classes=cell_classes or None,
         )
-        best_row = df.iloc[0]
+        best_row = ordered_df.iloc[0]
         highlight = render_alert(
             f"最佳区间：{escape(best_row['因子名称'])} {escape(best_row['参数区间'])}，"
-            f"最终得分 { _fmt_score(best_row['最终得分']) }。",
-            level="info",
-        )
-        return _wrap_subcard(description, "根据最终得分与收益/风险指标排序", table_html + highlight)
+            f"相邻平滑后得分 { _fmt_score(best_row['相邻平滑后得分']) }。",
+        level="info",
+    )
+        return _wrap_subcard(description, "根据综合得分与收益/风险指标排序", table_html + highlight)
 
     leaderboard_html = (
-        _build_ranking_block(positive_factors, "暂无正向因子满足条件", "正向参数区间排行榜")
+        _build_ranking_block(positive_factors, "暂无正向因子满足条件", "正向参数区间排行榜", apply_positive_highlight=True)
         + _build_ranking_block(negative_factors, "暂无负向因子满足条件", "负向参数区间排行榜（反向使用）")
     )
     builder.add_section("参数区间排行榜", leaderboard_html)
@@ -144,7 +165,7 @@ def _fa_generate_parameterized_report(self):
             ]
             items_html.append(
                 f"<li><strong>第{i}名：{escape(factor['因子名称'])} | {escape(factor['参数区间'])}</strong>"
-                f"<span class='badge {badge_class}'>最终得分 {_fmt_score(factor['最终得分'])}</span>"
+                f"<span class='badge {badge_class}'>相邻平滑后得分 {_fmt_score(factor['相邻平滑后得分'])}</span>"
                 f"{render_list(stats)}</li>"
             )
         return f"<ul class='top-list'>{''.join(items_html)}</ul>"
@@ -153,13 +174,13 @@ def _fa_generate_parameterized_report(self):
     builder.add_section("负向区间 TOP5（对冲/反向）", _wrap_subcard("负向精选", "用于风险对冲或反向策略", _build_top_list(negative_factors.head(5), "badge-negative")))
 
     detail_cards = []
-    all_factors_sorted = scores_df.sort_values('最终得分', ascending=False)
+    all_factors_sorted = scores_df.sort_values('相邻平滑后得分', ascending=False)
     for _, factor_row in all_factors_sorted.iterrows():
-        if factor_row['最终得分'] >= 9:
+        if factor_row['相邻平滑后得分'] >= 9:
             rating = "A级（优秀）"
-        elif factor_row['最终得分'] >= 8:
+        elif factor_row['相邻平滑后得分'] >= 8:
             rating = "B+级（良好）"
-        elif factor_row['最终得分'] >= 6:
+        elif factor_row['相邻平滑后得分'] >= 6:
             rating = "B级（一般）"
         else:
             rating = "C级（较差）"
@@ -193,7 +214,7 @@ def _fa_generate_parameterized_report(self):
             f"<h3>{escape(factor_row['因子名称'])} | {escape(factor_row['参数区间'])}</h3>"
             f"<p><span class='tag {direction_tag}'>{escape(factor_row['因子方向'])}</span>"
             f"<span class='tag'>{escape(rating)}</span>"
-            f"<span class='tag'>最终得分 {_fmt_score(factor_row['最终得分'])}</span>"
+            f"<span class='tag'>相邻平滑后得分 {_fmt_score(factor_row['相邻平滑后得分'])}</span>"
             f"<span class='tag muted'>综合得分 {_fmt_score(factor_row['综合得分'])}</span></p>"
             f"{render_list(metric_items)}"
             f"{group_html}"
@@ -206,7 +227,7 @@ def _fa_generate_parameterized_report(self):
     )
 
     strategy_items = [
-        "重点跟踪排名前列的正向区间，可按最终得分分配 20%~40% 的组合权重。",
+        "重点跟踪排名前列的正向区间，可按相邻平滑后得分分配 20%~40% 的组合权重。",
         "若需要对冲，可挑选负向区间作为保护腿，控制在 10% 左右的权重。",
         "不同参数区间之间保持风格多元，避免集中在单一市值或板块。",
         "实时监控最大回撤和收益波动，若连续恶化需及时调权或剔除。",
@@ -261,7 +282,7 @@ def _apply_param_csv_highlight(file_path, df, already_excel=False):
         wb = load_workbook(xlsx_path)
         ws = wb.active
         header_to_col = {cell.value: cell.column for cell in ws[1]}
-        target_cols = ['年化收益率', '综合得分', '最终得分']
+        target_cols = ['年化收益率', '综合得分', '相邻平滑后得分']
 
         blue_fill = PatternFill(start_color='FF4F81BD', end_color='FF4F81BD', fill_type='solid')
         red_fill = PatternFill(start_color='FFFF6B6B', end_color='FFFF6B6B', fill_type='solid')

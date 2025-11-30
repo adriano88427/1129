@@ -1195,11 +1195,14 @@ class FactorAnalysis:
             print(f"警告: 数据为空或列名不存在")
             return None
         
-        print(f"使用预处理后的数据进行分组，总样本数: {len(df)}")
+        print(f"- - - - - - - - - - - - - - - - - - - - - - - - - - - - - : {len(df)}")
+        df = df.copy()
+        df[factor_col] = pd.to_numeric(df[factor_col], errors="coerce")
+        df[self.return_col] = pd.to_numeric(df[self.return_col], errors="coerce")
         
-        # 统计分组收益计算的样本筛选情况
+        # - - - - - - - - - - - - - - - - - - - - - - - 
         total_samples = len(df)
-        df_clean = df[df[factor_col].notna()].copy()
+        df_clean = df.dropna(subset=[factor_col, self.return_col]).copy()
         valid_samples = len(df_clean)
         removed_samples = total_samples - valid_samples
         
@@ -1245,6 +1248,12 @@ class FactorAnalysis:
         
         # 重命名列
         group_stats.columns = ['分组', '平均收益', '收益标准差', '样本数量', '因子最小值', '因子最大值']
+
+        # 确保关键统计列为数值型，避免字符串在后续计算中参与运算
+        numeric_columns = ['平均收益', '收益标准差', '样本数量', '因子最小值', '因子最大值']
+        for col in numeric_columns:
+            if col in group_stats.columns:
+                group_stats[col] = pd.to_numeric(group_stats[col], errors='coerce')
         
         # 创建参数区间列
         # 使用更统一的格式化方法，避免显示不一致
@@ -1524,55 +1533,54 @@ class FactorAnalysis:
         Returns:
             dict: 数据特征分析结果
         """
-        df = self.data
-        characteristics = {}
+        df_source = getattr(self, 'processed_data', None)
+        if df_source is None or df_source.empty:
+            df_source = self.data if self.data is not None else pd.DataFrame()
+        df = df_source if df_source is not None else pd.DataFrame()
         
+        default_characteristics = {
+            'total_trades': len(df),
+            'avg_trade_interval': 2.0,
+            'actual_annual_trades': 164.0,
+            'observation_period_years': 5.18,
+            'holding_period_days': 2,
+            'trade_frequency_category': '高频'
+        }
+
         # 计算交易频率和持股周期
-        if '信号日期' in df.columns and self.return_col in df.columns:
-            df_sorted = df.sort_values('信号日期')
-            date_diff = df_sorted['信号日期'].diff().dt.days
-            
-            # 去除NaN值
-            date_diff_clean = date_diff.dropna()
-            avg_interval = date_diff_clean.mean()
-            
-            # 计算实际年交易频率
-            if avg_interval > 0:
-                actual_trades_per_year = 365 / avg_interval
-            else:
-                actual_trades_per_year = 365  # 默认值
-                
-            # 观测期长度
-            if len(date_diff_clean) > 0:
-                total_days = (df_sorted['信号日期'].max() - df_sorted['信号日期'].min()).days
-                observation_period = total_days / 365.25
-            else:
-                observation_period = 1  # 默认值
-            
-            # 持股周期分析（基于收益率数据推断）
-            returns = df[self.return_col].dropna()
-            holding_period = 2  # 从数据特征知道是2日持有
-            
-            characteristics = {
-                'total_trades': len(df),
-                'avg_trade_interval': avg_interval,
-                'actual_annual_trades': actual_trades_per_year,
-                'observation_period_years': observation_period,
-                'holding_period_days': holding_period,
-                'trade_frequency_category': '高频' if actual_trades_per_year > 100 else ('中频' if actual_trades_per_year > 20 else '低频')
-            }
-        else:
-            # 默认特征
-            characteristics = {
-                'total_trades': len(df),
-                'avg_trade_interval': 2.0,
-                'actual_annual_trades': 164.0,
-                'observation_period_years': 5.18,
-                'holding_period_days': 2,
-                'trade_frequency_category': '高频'
-            }
-        
-        return characteristics
+        if df is not None and not df.empty and '信号日期' in df.columns and self.return_col in df.columns:
+            signal_dates = pd.to_datetime(df['信号日期'], errors='coerce')
+            valid_dates = signal_dates.dropna().sort_values()
+
+            if len(valid_dates) > 0:
+                date_diff = valid_dates.diff().dt.days
+                date_diff_clean = date_diff.dropna()
+                avg_interval = date_diff_clean.mean() if not date_diff_clean.empty else np.nan
+
+                if pd.notna(avg_interval) and avg_interval > 0:
+                    actual_trades_per_year = 365 / avg_interval
+                else:
+                    actual_trades_per_year = 365  # 默认值
+
+                if len(valid_dates) >= 2:
+                    total_days = (valid_dates.iloc[-1] - valid_dates.iloc[0]).days
+                    observation_period = total_days / 365.25 if total_days > 0 else 1
+                else:
+                    observation_period = 1  # 默认观测期
+
+                holding_period = 2  # 从数据特征知道是2日持有
+                trade_interval_value = float(avg_interval) if pd.notna(avg_interval) else np.nan
+
+                return {
+                    'total_trades': len(df),
+                    'avg_trade_interval': trade_interval_value,
+                    'actual_annual_trades': actual_trades_per_year,
+                    'observation_period_years': observation_period,
+                    'holding_period_days': holding_period,
+                    'trade_frequency_category': '高频' if actual_trades_per_year > 100 else ('中频' if actual_trades_per_year > 20 else '低频')
+                }
+
+        return default_characteristics
     
     def _select_optimal_annualization_method(self, characteristics):
         """
@@ -1711,7 +1719,7 @@ class FactorAnalysis:
         print(f"     选择理由: {method_info['reason']}")
         print(f"     频率基础: {method_info['frequency_base']:.1f}次/年")
         
-        print(f"\n  🔢 年化计算结果（优化后）:")
+        print(f"\n  [结果] 年化计算结果（优化后）:")
         
         # 主要方法：标准复利年化
         if 'standard_compound_annual_return' in results:
@@ -2439,36 +2447,36 @@ class FactorAnalysis:
         
         if rating in ['A+', 'A', 'A-']:
             reasons.append(f"[OK] 优秀表现：{rating}级{factor_direction}因子，具有强预测能力和高收益性")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，{'超过国内A级标准(>0.08)' if abs(ic_mean) > 0.08 else '接近国内A级标准'}")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性{'优秀' if abs(ir) > 1.5 else '良好' if abs(ir) > 1.0 else '一般'}")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，{'超过国内A级标准(>0.08)' if abs(ic_mean) > 0.08 else '接近国内A级标准'}")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性{'优秀' if abs(ir) > 1.5 else '良好' if abs(ir) > 1.0 else '一般'}")
             if p_value < 0.05:
-                reasons.append(f"• 统计显著(p值={p_value:.3f})")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  统计显著(p值={p_value:.3f})")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：强烈推荐使用，可作为组合核心配置，权重15-25%")
             
         elif rating == 'B+':
-            reasons.append(f"• 良好表现：B+级{factor_direction}因子，符合国内B级标准")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，{'达到国内B级标准(>0.05)' if abs(ic_mean) > 0.05 else '接近国内B级标准'}")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性一般")
+            reasons.append(f"-  良好表现：B+级{factor_direction}因子，符合国内B级标准")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，{'达到国内B级标准(>0.05)' if abs(ic_mean) > 0.05 else '接近国内B级标准'}")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性一般")
             if p_value < 0.1:
-                reasons.append(f"• p值={p_value:.3f}，{'统计显著' if p_value < 0.05 else '边缘显著'}")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  p值={p_value:.3f}，{'统计显著' if p_value < 0.05 else '边缘显著'}")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：可谨慎使用，权重控制在10%以内，加强监控")
             
         elif rating == 'B':
-            reasons.append(f"• 一般表现：B级{factor_direction}因子，具有基础预测能力")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力一般")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性有限")
-            reasons.append(f"• 类型：{factor_type}")
+            reasons.append(f"-  一般表现：B级{factor_direction}因子，具有基础预测能力")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力一般")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性有限")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：谨慎使用，权重控制在5%以内，定期评估")
             
         elif rating in ['C+', 'C']:
             reasons.append(f"✗ 表现不佳：该因子{'C+' if rating == 'C+' else 'C'}级")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力不足")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性较差")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力不足")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性较差")
             if p_value >= 0.05:
-                reasons.append(f"• p值={p_value:.3f}，统计不显著")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  p值={p_value:.3f}，统计不显著")
+            reasons.append(f"-  类型：{factor_type}")
             if rating == 'C+':
                 reasons.append("使用建议：不推荐使用，如需使用请严格控制权重5%以下")
             else:
@@ -2524,45 +2532,45 @@ class FactorAnalysis:
         
         if rating in ['A+', 'A']:
             reasons.append(f"[OK] 优秀表现：{rating}级因子，具有强预测能力和高收益性")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力强")
-            reasons.append(f"• 多空收益{abs(long_short_return):.3f}，收益表现卓越")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性{'优秀' if abs(ir) > 1.5 else '良好'}")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力强")
+            reasons.append(f"-  多空收益{abs(long_short_return):.3f}，收益表现卓越")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性{'优秀' if abs(ir) > 1.5 else '良好'}")
             if p_value < 0.05:
-                reasons.append(f"• 统计显著(p值={p_value:.3f})")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  统计显著(p值={p_value:.3f})")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：强烈推荐使用，可作为组合核心配置，权重15-25%")
             
         elif rating == 'B+':
-            reasons.append(f"• 良好表现：B+级因子，具有中等预测能力和收益性")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力{'中等' if abs(ic_mean) > 0.05 else '一般'}")
-            reasons.append(f"• 多空收益{abs(long_short_return):.3f}，收益表现{'优秀' if abs(long_short_return) > 0.02 else '一般'}")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性一般")
+            reasons.append(f"-  良好表现：B+级因子，具有中等预测能力和收益性")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力{'中等' if abs(ic_mean) > 0.05 else '一般'}")
+            reasons.append(f"-  多空收益{abs(long_short_return):.3f}，收益表现{'优秀' if abs(long_short_return) > 0.02 else '一般'}")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性一般")
             if p_value < 0.05:
-                reasons.append(f"• 统计显著(p值={p_value:.3f})")
+                reasons.append(f"-  统计显著(p值={p_value:.3f})")
             else:
-                reasons.append(f"• p值={p_value:.3f}")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  p值={p_value:.3f}")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：可谨慎使用，权重控制在10%以内，加强监控")
             
         elif rating == 'B':
-            reasons.append(f"• 一般表现：B级因子，具有基础预测能力")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力一般")
-            reasons.append(f"• 多空收益{abs(long_short_return):.3f}，收益表现一般")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性有限")
+            reasons.append(f"-  一般表现：B级因子，具有基础预测能力")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力一般")
+            reasons.append(f"-  多空收益{abs(long_short_return):.3f}，收益表现一般")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性有限")
             if p_value < 0.05:
-                reasons.append(f"• 统计显著(p值={p_value:.3f})")
+                reasons.append(f"-  统计显著(p值={p_value:.3f})")
             else:
-                reasons.append(f"• p值={p_value:.3f}")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  p值={p_value:.3f}")
+            reasons.append(f"-  类型：{factor_type}")
             reasons.append("使用建议：谨慎使用，权重控制在5%以内，定期评估")
             
         elif rating in ['C+', 'C']:
             reasons.append(f"✗ 表现不佳：该因子{'C+' if rating == 'C+' else 'C'}级")
-            reasons.append(f"• IC均值{abs(ic_mean):.3f}，预测能力不足")
-            reasons.append(f"• IR值{abs(ir):.3f}，稳定性较差")
+            reasons.append(f"-  IC均值{abs(ic_mean):.3f}，预测能力不足")
+            reasons.append(f"-  IR值{abs(ir):.3f}，稳定性较差")
             if p_value >= 0.05:
-                reasons.append(f"• p值={p_value:.3f}，统计不显著")
-            reasons.append(f"• 类型：{factor_type}")
+                reasons.append(f"-  p值={p_value:.3f}，统计不显著")
+            reasons.append(f"-  类型：{factor_type}")
             if rating == 'C+':
                 reasons.append("使用建议：不推荐使用，如需使用请严格控制权重5%以下")
             else:
@@ -2771,13 +2779,13 @@ class FactorAnalysis:
         
         # 核心发现
         if excellent_count > 0 and best_factor is not None:
-            summary_lines.append(f"• 发现 {excellent_count} 个优秀因子(A+和A级)，其中 {best_factor['因子名称']} 表现最佳(评级:{best_factor['评级']})。")
+            summary_lines.append(f"-  发现 {excellent_count} 个优秀因子(A+和A级)，其中 {best_factor['因子名称']} 表现最佳(评级:{best_factor['评级']})。")
         elif excellent_count > 0:
-            summary_lines.append(f"• 发现 {excellent_count} 个优秀因子(A+和A级)，但无法确定最佳因子。")
+            summary_lines.append(f"-  发现 {excellent_count} 个优秀因子(A+和A级)，但无法确定最佳因子。")
         
         # 因子类型分析
         if type_counts.get('非线性因子', 0) > 0:
-            summary_lines.append(f"• 检测到 {type_counts['非线性因子']} 个非线性因子，建议采用分组选股策略。")
+            summary_lines.append(f"-  检测到 {type_counts['非线性因子']} 个非线性因子，建议采用分组选股策略。")
         
         # 投资建议
         if excellent_count >= 2:
@@ -2837,19 +2845,19 @@ class FactorAnalysis:
     
     def generate_positive_factors_analysis(self, summary_mode=False):
         """
-        ????????????
+        - - - - - - - - - - - - 
 
         Returns:
-            str: ??????????
+            str: - - - - - - - - - - 
         """
         return _fa_generate_positive_factors_analysis(self, summary_mode=summary_mode)
 
     def generate_negative_factors_analysis(self, summary_mode=False):
         """
-        ????????????
+        - - - - - - - - - - - - 
 
         Returns:
-            str: ??????????
+            str: - - - - - - - - - - 
         """
         return _fa_generate_negative_factors_analysis(self, summary_mode=summary_mode)
     
@@ -2895,13 +2903,13 @@ class FactorAnalysis:
     
     def generate_factor_analysis_report(self, summary_df, process_factors=False, factor_method='standardize', winsorize=False, summary_mode=False):
         """
-        ???????????
+        - - - - - - - - - - - 
 
         Args:
-            summary_df: ?????????
-            process_factors: ??????????
-            factor_method: ???????'standardize'?????? 'normalize'?????
-            winsorize: ?????????
+            summary_df: - - - - - - - - - 
+            process_factors: - - - - - - - - - - 
+            factor_method: - - - - - - - 'standardize'- - - - - -  'normalize'- - - - - 
+            winsorize: - - - - - - - - - 
         """
         return _fa_generate_factor_analysis_report(
             self,
@@ -3264,7 +3272,7 @@ class FactorAnalysis:
     
     def generate_summary_report(self):
         """
-        ????????
+        - - - - - - - - 
         """
         return _fa_generate_summary_report(self)
     
